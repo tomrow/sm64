@@ -21,6 +21,8 @@ NON_MATCHING ?= 0
 TARGET_N64 ?= 0
 # Build for Emscripten/WebGL
 TARGET_WEB ?= 0
+# Build for Nintendo DS
+TARGET_NDS ?= 1
 # Compiler to use (ido or gcc)
 COMPILER ?= ido
 
@@ -28,14 +30,20 @@ COMPILER ?= ido
 ifeq ($(TARGET_N64),0)
 
   NON_MATCHING := 1
-  GRUCODE := f3dex2e
+  ifeq ($(TARGET_NDS),1)
+    GRUCODE := f3dex2
+  else
+    GRUCODE := f3dex2e
+  endif
   TARGET_WINDOWS := 0
   ifeq ($(TARGET_WEB),0)
-    ifeq ($(OS),Windows_NT)
-      TARGET_WINDOWS := 1
-    else
-      # TODO: Detect Mac OS X, BSD, etc. For now, assume Linux
-      TARGET_LINUX := 1
+    ifeq ($(TARGET_NDS),0)
+      ifeq ($(OS),Windows_NT)
+        TARGET_WINDOWS := 1
+      else
+        # TODO: Detect Mac OS X, BSD, etc. For now, assume Linux
+        TARGET_LINUX := 1
+      endif
     endif
   endif
 
@@ -47,8 +55,10 @@ ifeq ($(TARGET_N64),0)
       endif
     endif
   else
-    # On others, default to OpenGL
-    ENABLE_OPENGL ?= 1
+    ifeq ($(TARGET_NDS),0)
+      # On others, default to OpenGL
+      ENABLE_OPENGL ?= 1
+    endif
   endif
 
   # Sanity checks
@@ -194,7 +204,11 @@ else
 ifeq ($(TARGET_WEB),1)
   BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_web
 else
+ifeq ($(TARGET_NDS),1)
+ BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_nds
+else
   BUILD_DIR := $(BUILD_DIR_BASE)/$(VERSION)_pc
+endif
 endif
 endif
 
@@ -202,10 +216,14 @@ LIBULTRA := $(BUILD_DIR)/libultra.a
 ifeq ($(TARGET_WEB),1)
 EXE := $(BUILD_DIR)/$(TARGET).html
 else
+ifeq ($(TARGET_NDS),1)
+EXE := $(BUILD_DIR)/$(TARGET).nds
+else
 ifeq ($(TARGET_WINDOWS),1)
 EXE := $(BUILD_DIR)/$(TARGET).exe
 else
 EXE := $(BUILD_DIR)/$(TARGET)
+endif
 endif
 endif
 ROM := $(BUILD_DIR)/$(TARGET).z64
@@ -423,21 +441,32 @@ export LANG := C
 
 else # TARGET_N64
 
-AS := as
-ifneq ($(TARGET_WEB),1)
-  CC := gcc
-  CXX := g++
-else
-  CC := emcc
-endif
-ifeq ($(TARGET_WINDOWS),1)
+ifeq ($(TARGET_NDS),1)
+  CPP := $(DEVKITARM)/bin/arm-none-eabi-cpp -P
+  OBJDUMP := $(DEVKITARM)/bin/arm-none-eabi-objdump
+  OBJCOPY := $(DEVKITARM)/bin/arm-none-eabi-objcopy
+  AS := $(DEVKITARM)/bin/arm-none-eabi-as
+  CC := $(DEVKITARM)/bin/arm-none-eabi-gcc
+  CXX := $(DEVKITARM)/bin/arm-none-eabi-g++
   LD := $(CXX)
 else
-  LD := $(CC)
+  AS := as
+  ifneq ($(TARGET_WEB),1)
+    CC := gcc
+    CXX := g++
+  else
+    CC := emcc
+  endif
+  ifeq ($(TARGET_WINDOWS),1)
+    LD := $(CXX)
+  else
+    LD := $(CC)
+  endif
+  CPP := cpp -P
+  OBJDUMP := objdump
+  OBJCOPY := objcopy
 endif
-CPP := cpp -P
-OBJDUMP := objdump
-OBJCOPY := objcopy
+
 PYTHON := python3
 
 # Platform-specific compiler and linker flags
@@ -452,6 +481,11 @@ endif
 ifeq ($(TARGET_WEB),1)
   PLATFORM_CFLAGS  := -DTARGET_WEB
   PLATFORM_LDFLAGS := -lm -no-pie -s TOTAL_MEMORY=20MB -g4 --source-map-base http://localhost:8080/ -s "EXTRA_EXPORTED_RUNTIME_METHODS=['callMain']"
+endif
+ifeq ($(TARGET_NDS),1)
+  LIBDIRS          := $(DEVKITPRO)/libnds
+  PLATFORM_CFLAGS  := -DTARGET_NDS -DARM9 -march=armv5te -mtune=arm946e-s -fomit-frame-pointer -ffast-math $(foreach dir,$(LIBDIRS),-I$(dir)/include)
+  PLATFORM_LDFLAGS := -lnds9 -lm -specs=dsi_arm9.specs -g -mthumb -mthumb-interwork $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 endif
 
 PLATFORM_CFLAGS += -DNO_SEGMENTED_MEMORY -DUSE_SYSTEM_MALLOC
@@ -482,10 +516,12 @@ ifeq ($(ENABLE_DX12),1)
   PLATFORM_LDFLAGS += -lgdi32 -static
 endif
 
-GFX_CFLAGS += -DWIDESCREEN
+ifeq ($(TARGET_NDS),0)
+ GFX_CFLAGS += -DWIDESCREEN
+endif
 
 CC_CHECK := $(CC) -fsyntax-only -fsigned-char $(INCLUDE_CFLAGS) -Wall -Wextra -Wno-format-security -D_LANGUAGE_C $(VERSION_CFLAGS) $(MATCH_CFLAGS) $(PLATFORM_CFLAGS) $(GFX_CFLAGS) $(GRUCODE_CFLAGS)
-CFLAGS := $(OPT_FLAGS) $(INCLUDE_CFLAGS) -D_LANGUAGE_C $(VERSION_CFLAGS) $(MATCH_CFLAGS) $(PLATFORM_CFLAGS) $(GFX_CFLAGS) $(GRUCODE_CFLAGS) -fno-strict-aliasing -fwrapv -march=native
+CFLAGS := $(OPT_FLAGS) $(INCLUDE_CFLAGS) -D_LANGUAGE_C $(VERSION_CFLAGS) $(MATCH_CFLAGS) $(PLATFORM_CFLAGS) $(GFX_CFLAGS) $(GRUCODE_CFLAGS) -fno-strict-aliasing -fwrapv
 
 ASFLAGS := -I include -I $(BUILD_DIR) $(VERSION_ASFLAGS)
 
@@ -821,8 +857,14 @@ $(BUILD_DIR)/$(TARGET).objdump: $(ELF)
 	$(OBJDUMP) -D $< > $@
 
 else
+ifeq ($(TARGET_NDS),1)
+$(EXE): $(O_FILES) $(MIO0_FILES:.mio0=.o) $(SOUND_OBJ_FILES) $(ULTRA_O_FILES) $(GODDARD_O_FILES)
+	$(LD) -L $(BUILD_DIR) -o $@.elf $(O_FILES) $(SOUND_OBJ_FILES) $(ULTRA_O_FILES) $(GODDARD_O_FILES) $(LDFLAGS)
+	ndstool -c $@ -9 $@.elf
+else
 $(EXE): $(O_FILES) $(MIO0_FILES:.mio0=.o) $(SOUND_OBJ_FILES) $(ULTRA_O_FILES) $(GODDARD_O_FILES)
 	$(LD) -L $(BUILD_DIR) -o $@ $(O_FILES) $(SOUND_OBJ_FILES) $(ULTRA_O_FILES) $(GODDARD_O_FILES) $(LDFLAGS)
+endif
 endif
 
 

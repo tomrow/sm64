@@ -17,6 +17,8 @@
 #include "gfx/gfx_dxgi.h"
 #include "gfx/gfx_glx.h"
 #include "gfx/gfx_sdl.h"
+#include "gfx/gfx_nds.h"
+#include "gfx/gfx_nds_renderer.h"
 #include "gfx/gfx_dummy.h"
 
 #include "audio/audio_api.h"
@@ -24,6 +26,7 @@
 #include "audio/audio_pulse.h"
 #include "audio/audio_alsa.h"
 #include "audio/audio_sdl.h"
+#include "audio/audio_nds.h"
 #include "audio/audio_null.h"
 
 #include "controller/controller_keyboard.h"
@@ -150,8 +153,10 @@ void main_func(void) {
 #endif
     gEffectsMemoryPool = mem_pool_init(0x4000, MEMORY_POOL_LEFT);
 
+#ifndef TARGET_NDS
     configfile_load(CONFIG_FILE);
     atexit(save_config);
+#endif
 
 #ifdef TARGET_WEB
     emscripten_set_main_loop(em_main_loop, 0, 0);
@@ -171,6 +176,9 @@ void main_func(void) {
     #else
         wm_api = &gfx_sdl;
     #endif
+#elif defined(TARGET_NDS)
+    rendering_api = &gfx_nds_renderer;
+    wm_api = &gfx_nds;
 #elif defined(ENABLE_GFX_DUMMY)
     rendering_api = &gfx_dummy_renderer_api;
     wm_api = &gfx_dummy_wm_api;
@@ -199,6 +207,11 @@ void main_func(void) {
 #ifdef TARGET_WEB
     if (audio_api == NULL && audio_sdl.init()) {
         audio_api = &audio_sdl;
+    }
+#endif
+#ifdef TARGET_NDS
+    if (audio_api == NULL && audio_nds.init()) {
+        audio_api = &audio_nds;
     }
 #endif
     if (audio_api == NULL) {
