@@ -30,19 +30,7 @@
 #include "gfx_rendering_api.h"
 
 #define TEXTURE_POOL_SIZE 1024
-
-static void glVertex4v16(v16 x, v16 y, v16 z, v16 w) {
-    const m4x4 matrix = {
-        x, 0, 0, 0,
-        0, y, 0, 0,
-        0, 0, z, 0,
-        0, 0, 0, w
-    };
-
-    glMatrixMode(GL_PROJECTION);
-    glLoadMatrix4x4(&matrix);
-    glVertex3v16(inttov16(1), inttov16(1), inttov16(1));
-}
+#define MAX_UI_ELEMENTS 128
 
 struct ShaderProgram {
     uint8_t program_id;
@@ -71,9 +59,11 @@ static uint16_t texture_fifo[TEXTURE_POOL_SIZE];
 static uint16_t texture_fifo_start;
 static uint16_t texture_fifo_end;
 
-static int polygon_id;
-
 static bool cur_depth_test;
+static bool background;
+static v16 z_depth;
+
+static int polygon_id;
 
 static bool gfx_nds_renderer_z_is_from_0_to_1(void) {
     return false;
@@ -237,23 +227,42 @@ static void gfx_nds_renderer_set_zmode_decal(bool zmode_decal) {
 }
 
 static void gfx_nds_renderer_set_viewport(int x, int y, int width, int height) {
-    //glViewport(x, y, width, height);
+    glViewport(x, y, width - 1, height - 1);
 }
 
 static void gfx_nds_renderer_set_scissor(int x, int y, int width, int height) {
 }
 
 static void gfx_nds_renderer_set_use_alpha(bool use_alpha) {
-    /*if (use_alpha) {
-        glEnable(GL_BLEND);
-    } else {
-        glDisable(GL_BLEND);
-    }*/
+}
+
+static void gfx_nds_renderer_push_vtx(float x, float y, float z, float w) {
+    // 2D elements are drawn with depth test disabled, which the DS doesn't support
+    // This is a hack that relies on the assumption that background elements are pushed first, and foreground last
+    if (!cur_depth_test) {
+        x *= 0x1000;
+        y *= 0x1000;
+        z = (--z_depth) / 6;
+        w *= 0x1000;
+    }
+    else if (background) {
+        z_depth = (MAX_UI_ELEMENTS - 0x1000) * 6;
+        background = false;
+    }
+
+    const m4x4 matrix = {
+        x, 0, 0, 0,
+        0, y, 0, 0,
+        0, 0, z, 0,
+        0, 0, 0, w
+    };
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadMatrix4x4(&matrix);
+    glVertex3v16(inttov16(1), inttov16(1), inttov16(1));
 }
 
 static void gfx_nds_renderer_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
-    if (!cur_depth_test) return;
-
     const struct CCFeatures *cc_features = &shader_programs[cur_shader_program].cc_features;
     const size_t t = buf_vbo_len / buf_vbo_num_tris;
     const size_t v = t / 3;
@@ -351,15 +360,15 @@ static void gfx_nds_renderer_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
 
         if (has_texture) glTexCoord2f(buf_vbo[i * t + v * 0 + 4], buf_vbo[i * t + v * 0 + 5]);
         if (has_color) glColor3f(buf_vbo[i * t + v * 0 + 4 + o], buf_vbo[i * t + v * 0 + 5 + o], buf_vbo[i * t + v * 0 + 6 + o]);
-        glVertex4v16(buf_vbo[i * t + v * 0 + 0], buf_vbo[i * t + v * 0 + 1], buf_vbo[i * t + v * 0 + 2], buf_vbo[i * t + v * 0 + 3]);
+        gfx_nds_renderer_push_vtx(buf_vbo[i * t + v * 0 + 0], buf_vbo[i * t + v * 0 + 1], buf_vbo[i * t + v * 0 + 2], buf_vbo[i * t + v * 0 + 3]);
 
         if (has_texture) glTexCoord2f(buf_vbo[i * t + v * 1 + 4], buf_vbo[i * t + v * 1 + 5]);
         if (has_color) glColor3f(buf_vbo[i * t + v * 1 + 4 + o], buf_vbo[i * t + v * 1 + 5 + o], buf_vbo[i * t + v * 1 + 6 + o]);
-        glVertex4v16(buf_vbo[i * t + v * 1 + 0], buf_vbo[i * t + v * 1 + 1], buf_vbo[i * t + v * 1 + 2], buf_vbo[i * t + v * 1 + 3]);
+        gfx_nds_renderer_push_vtx(buf_vbo[i * t + v * 1 + 0], buf_vbo[i * t + v * 1 + 1], buf_vbo[i * t + v * 1 + 2], buf_vbo[i * t + v * 1 + 3]);
 
         if (has_texture) glTexCoord2f(buf_vbo[i * t + v * 2 + 4], buf_vbo[i * t + v * 2 + 5]);
         if (has_color) glColor3f(buf_vbo[i * t + v * 2 + 4 + o], buf_vbo[i * t + v * 2 + 5 + o], buf_vbo[i * t + v * 2 + 6 + o]);
-        glVertex4v16(buf_vbo[i * t + v * 2 + 0], buf_vbo[i * t + v * 2 + 1], buf_vbo[i * t + v * 2 + 2], buf_vbo[i * t + v * 2 + 3]);
+        gfx_nds_renderer_push_vtx(buf_vbo[i * t + v * 2 + 0], buf_vbo[i * t + v * 2 + 1], buf_vbo[i * t + v * 2 + 2], buf_vbo[i * t + v * 2 + 3]);
     }
 
     glBindTexture(GL_TEXTURE_2D, texture_infos[cur_texture_info].texture);
@@ -371,9 +380,8 @@ static void gfx_nds_renderer_init(void) {
     vramSetBankD(VRAM_D_TEXTURE);
 
     glInit();
-    glViewport(0, 0, 255, 191);
     glClearColor(0, 0, 0, 31);
-    glClearDepth(0x7FFF);
+    glClearDepth(GL_MAX_DEPTH);
     glEnable(GL_ANTIALIAS);
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
@@ -387,6 +395,8 @@ static void gfx_nds_renderer_on_resize(void) {
 }
 
 static void gfx_nds_renderer_start_frame(void) {
+    background = true;
+    z_depth = 0x1000 * 6;
 }
 
 static void gfx_nds_renderer_end_frame(void) {
