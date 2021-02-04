@@ -43,7 +43,8 @@ struct TextureInfo {
     int size_x;
     int size_y;
     int param;
-    uint16_t *data;
+    int format;
+    uint8_t *data;
 };
 
 static struct ShaderProgram shader_programs[32];
@@ -123,7 +124,7 @@ static void gfx_nds_renderer_select_texture(int tile, uint32_t texture_id) {
 
         if (info->data) {
             uint16_t i = texture_fifo_end;
-            for (; !glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, info->size_x, info->size_y, 0, TEXGEN_TEXCOORD, info->data); i = (i + 1) % TEXTURE_POOL_SIZE) {
+            for (; !glTexImage2D(GL_TEXTURE_2D, 0, info->format, info->size_x, info->size_y, 0, TEXGEN_TEXCOORD, info->data); i = (i + 1) % TEXTURE_POOL_SIZE) {
                 if (i != texture_id && texture_infos[i].texture) {
                     glDeleteTextures(1, &texture_infos[i].texture);
                     texture_infos[i].texture = 0;
@@ -168,22 +169,45 @@ static void gfx_nds_renderer_upload_texture(const uint8_t *rgba32_buf, int width
 
     info->param = glGetTexParameter();
 
-    info->data = (uint16_t*)malloc(width * height * sizeof(uint16_t));
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            const uint32_t color = ((uint32_t*)rgba32_buf)[y * width + x];
-            const uint8_t r = ((color >>  0) & 0xFF) >> 3;
-            const uint8_t g = ((color >>  8) & 0xFF) >> 3;
-            const uint8_t b = ((color >> 16) & 0xFF) >> 3;
-            const uint8_t a = ((color >> 24) & 0xFF) ? 1 : 0;
-            info->data[y * width + x] = (a << 15) | (b << 10) | (g << 5) | r;
+    info->format = GL_RGBA;
+    for (int i = 0; i < width * height; i++) {
+        const uint8_t a = ((uint32_t*)rgba32_buf)[i] >> 24;
+        if (a > 0 && a < 0xFF) {
+            info->format = GL_RGB8_A5;
+            break;
         }
     }
 
-    DC_FlushRange(info->data, width * height * sizeof(uint16_t));
+    const int size = width * height * ((info->format == GL_RGBA) ? sizeof(uint16_t) : sizeof(uint8_t));
+    info->data = (uint8_t*)malloc(size);
+
+    if (info->format == GL_RGBA) {
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                const uint32_t color = ((uint32_t*)rgba32_buf)[y * width + x];
+                const uint8_t r = ((color >>  0) & 0xFF) >> 3;
+                const uint8_t g = ((color >>  8) & 0xFF) >> 3;
+                const uint8_t b = ((color >> 16) & 0xFF) >> 3;
+                const uint8_t a = ((color >> 24) & 0xFF) ? 1 : 0;
+                ((uint16_t*)info->data)[y * width + x] = (a << 15) | (b << 10) | (g << 5) | r;
+            }
+        }
+    }
+    else {
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                const uint32_t color = ((uint32_t*)rgba32_buf)[y * width + x];
+                const uint8_t i = ((color >>  0) & 0xFF) >> 5;
+                const uint8_t a = ((color >> 24) & 0xFF) >> 3;
+                info->data[y * width + x] = (a << 3) | i;
+            }
+        }
+    }
+
+    DC_FlushRange(info->data, size);
 
     uint16_t i = texture_fifo_end;
-    for (; !glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, info->size_x, info->size_y, 0, TEXGEN_TEXCOORD, info->data); i = (i + 1) % TEXTURE_POOL_SIZE) {
+    for (; !glTexImage2D(GL_TEXTURE_2D, 0, info->format, info->size_x, info->size_y, 0, TEXGEN_TEXCOORD, info->data); i = (i + 1) % TEXTURE_POOL_SIZE) {
         if (i != cur_texture_info && texture_infos[i].texture) {
             glDeleteTextures(1, &texture_infos[i].texture);
             texture_infos[i].texture = 0;
@@ -378,6 +402,7 @@ static void gfx_nds_renderer_init(void) {
     vramSetBankA(VRAM_A_TEXTURE);
     vramSetBankB(VRAM_B_TEXTURE);
     vramSetBankD(VRAM_D_TEXTURE);
+    vramSetBankE(VRAM_E_TEX_PALETTE);
 
     glInit();
     glClearColor(0, 0, 0, 31);
@@ -389,6 +414,12 @@ static void gfx_nds_renderer_init(void) {
     glGenTextures(1, &no_texture);
     glBindTexture(GL_TEXTURE_2D, no_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_NOTEXTURE, 0, 0, 0, TEXGEN_TEXCOORD, NULL);
+
+    uint16_t intensity[8];
+    for (int i = 0; i < 8; i++) {
+        intensity[i] = ((i << 2) << 10) | ((i << 2) << 5) | (i << 2);
+    }
+    glColorTableEXT(GL_TEXTURE_2D, 0, 8, 0, 0, intensity);
 }
 
 static void gfx_nds_renderer_on_resize(void) {
