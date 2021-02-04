@@ -71,6 +71,8 @@ static uint16_t texture_fifo[TEXTURE_POOL_SIZE];
 static uint16_t texture_fifo_start;
 static uint16_t texture_fifo_end;
 
+static int polygon_id;
+
 static bool cur_depth_test;
 
 static bool gfx_nds_renderer_z_is_from_0_to_1(void) {
@@ -242,11 +244,11 @@ static void gfx_nds_renderer_set_scissor(int x, int y, int width, int height) {
 }
 
 static void gfx_nds_renderer_set_use_alpha(bool use_alpha) {
-    if (use_alpha) {
+    /*if (use_alpha) {
         glEnable(GL_BLEND);
     } else {
         glDisable(GL_BLEND);
-    }
+    }*/
 }
 
 static void gfx_nds_renderer_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
@@ -257,17 +259,41 @@ static void gfx_nds_renderer_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
     const size_t v = t / 3;
     const size_t c = cc_features->opt_alpha ? 4 : 3;
     
-    const bool has_color = (cc_features->num_inputs > 0);
-    if (!has_color) {
-        glColor3b(0xFF, 0xFF, 0xFF);
-    }
-
-    const bool has_texture = (cc_features->used_textures[0] || cc_features->used_textures[1]);
-    if (!has_texture) {
-        glBindTexture(GL_TEXTURE_2D, no_texture);
-    }
-
+    bool has_color = (cc_features->num_inputs > 0);
+    bool has_texture = (cc_features->used_textures[0] || cc_features->used_textures[1]);
     size_t o = has_texture ? 2 : 0;
+
+    int poly_fmt = POLY_CULL_NONE;
+    bool alpha_max = false;
+
+    if (has_texture) {
+        if (cc_features->do_single[0]) {
+            poly_fmt |= POLY_MODULATION;
+            has_color = false;
+
+            if ((cc_features->do_single[1] || cc_features->color_alpha_same) || !cc_features->do_multiply[1]) {
+                alpha_max = true;
+            }
+        }
+        else if (cc_features->do_multiply[0]) {
+            poly_fmt |= POLY_MODULATION;
+
+            if ((cc_features->do_single[1] && !cc_features->color_alpha_same) || !(cc_features->do_multiply[1] || cc_features->color_alpha_same)) {
+                alpha_max = true;
+
+                // Hack to prevent some levels from being pitch-black
+                if (!cc_features->do_mix[1]) {
+                    poly_fmt |= POLY_DECAL;
+                }
+            }
+        }
+        else if (cc_features->do_mix[0]) {
+            poly_fmt |= POLY_DECAL;
+        }
+        else {
+            has_texture = false;
+        }
+    }
 
     if (cc_features->num_inputs > 1)
     {
@@ -294,10 +320,35 @@ static void gfx_nds_renderer_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         if (first_constant) {
             o += c;
         }
+
+        // Hack to hide goddard's texture since it can't be properly blended
+        has_texture = false;
     }
 
+    if (!has_color) {
+        glColor3b(0xFF, 0xFF, 0xFF);
+    }
+
+    if (!has_texture) {
+        glBindTexture(GL_TEXTURE_2D, no_texture);
+    }
+
+    if (has_color && cc_features->opt_alpha) {
+        polygon_id = (polygon_id + 1) % 64;
+    }
+
+    glPolyFmt(poly_fmt | POLY_ALPHA(31));
     glBegin(GL_TRIANGLE);
+
     for (size_t i = 0; i < buf_vbo_num_tris; i++) {
+        if (has_color && cc_features->opt_alpha) {
+            const int alpha = alpha_max ? 31 : (buf_vbo[i * t + v * 0 + 7 + o] * 31);
+            if (alpha == 0) continue;
+
+            glPolyFmt(poly_fmt | POLY_ALPHA(alpha) | POLY_ID(polygon_id));
+            glBegin(GL_TRIANGLE);
+        }
+
         if (has_texture) glTexCoord2f(buf_vbo[i * t + v * 0 + 4], buf_vbo[i * t + v * 0 + 5]);
         if (has_color) glColor3f(buf_vbo[i * t + v * 0 + 4 + o], buf_vbo[i * t + v * 0 + 5 + o], buf_vbo[i * t + v * 0 + 6 + o]);
         glVertex4v16(buf_vbo[i * t + v * 0 + 0], buf_vbo[i * t + v * 0 + 1], buf_vbo[i * t + v * 0 + 2], buf_vbo[i * t + v * 0 + 3]);
@@ -310,7 +361,6 @@ static void gfx_nds_renderer_draw_triangles(float buf_vbo[], size_t buf_vbo_len,
         if (has_color) glColor3f(buf_vbo[i * t + v * 2 + 4 + o], buf_vbo[i * t + v * 2 + 5 + o], buf_vbo[i * t + v * 2 + 6 + o]);
         glVertex4v16(buf_vbo[i * t + v * 2 + 0], buf_vbo[i * t + v * 2 + 1], buf_vbo[i * t + v * 2 + 2], buf_vbo[i * t + v * 2 + 3]);
     }
-    glEnd();
 
     glBindTexture(GL_TEXTURE_2D, texture_infos[cur_texture_info].texture);
 }
@@ -324,9 +374,9 @@ static void gfx_nds_renderer_init(void) {
     glViewport(0, 0, 255, 191);
     glClearColor(0, 0, 0, 31);
     glClearDepth(0x7FFF);
-    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
     glEnable(GL_ANTIALIAS);
     glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
 
     glGenTextures(1, &no_texture);
     glBindTexture(GL_TEXTURE_2D, no_texture);
