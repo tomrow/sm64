@@ -64,6 +64,7 @@ static bool cur_depth_test;
 static bool background;
 static v16 z_depth;
 
+static bool cur_zmode_decal;
 static int polygon_id;
 
 static bool gfx_nds_renderer_z_is_from_0_to_1(void) {
@@ -248,6 +249,7 @@ static void gfx_nds_renderer_set_depth_mask(bool z_upd) {
 }
 
 static void gfx_nds_renderer_set_zmode_decal(bool zmode_decal) {
+    cur_zmode_decal = zmode_decal;
 }
 
 static void gfx_nds_renderer_set_viewport(int x, int y, int width, int height) {
@@ -272,6 +274,11 @@ static void gfx_nds_renderer_push_vtx(float x, float y, float z, float w) {
     else if (background) {
         z_depth = (MAX_UI_ELEMENTS - 0x1000) * 6;
         background = false;
+    }
+
+    // Adjust the Z value to reduce Z-fighting
+    if (cur_zmode_decal) {
+        z -= 5;
     }
 
     const m4x4 matrix = {
