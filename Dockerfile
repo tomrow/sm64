@@ -1,7 +1,7 @@
 FROM devkitpro/devkitarm:latest as build
 
 RUN apt update
-RUN apt -y install build-essential bsdmainutils sox
+RUN apt -y install build-essential bsdmainutils sox bc
 RUN mkdir /sm64
 WORKDIR /sm64
 
